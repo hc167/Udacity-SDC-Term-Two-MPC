@@ -1,3 +1,4 @@
+#include <fstream>
 #include <math.h>
 #include <uWS/uWS.h>
 #include <chrono>
@@ -8,6 +9,8 @@
 #include "Eigen-3.3/Eigen/QR"
 #include "MPC.h"
 #include "json.hpp"
+
+using namespace std;
 
 // for convenience
 using json = nlohmann::json;
@@ -65,8 +68,87 @@ Eigen::VectorXd polyfit(Eigen::VectorXd xvals, Eigen::VectorXd yvals,
   return result;
 }
 
+double distance(double x1, double y1, double x2, double y2)
+{
+  return sqrt((x2-x1)*(x2-x1)+(y2-y1)*(y2-y1));
+}
+
+int ClosestWaypoint(double x, double y, vector<double> & maps_x, vector<double> & maps_y)
+{
+  double closestLen = 999999; //large number
+  int closestWaypoint = 0;
+
+  for(int i = 0; i < maps_x.size(); i++)
+    {
+      double map_x = maps_x[i];
+      double map_y = maps_y[i];
+      double dist = distance(x,y,map_x,map_y);
+      if(dist < closestLen)
+	{
+	  closestLen = dist;
+	  closestWaypoint = i;
+	}
+    }
+  return closestWaypoint;
+}
+
+int NextWaypoint(double x, double y, double theta, vector<double> maps_x, vector<double> maps_y)
+{
+
+  int closestWaypoint = ClosestWaypoint(x,y,maps_x,maps_y);
+
+  double map_x = maps_x[closestWaypoint];
+  double map_y = maps_y[closestWaypoint];
+
+  double heading = atan2( (map_y-y),(map_x-x) );
+
+  double angle = abs(theta-heading);
+
+  if(angle > pi()/4)
+    {
+      closestWaypoint++;
+    }
+
+  return closestWaypoint;
+}
+
 int main() {
   uWS::Hub h;
+
+  vector<double> map_x;
+  vector<double> map_y;
+
+  // Waypoint map to read from
+  string map_file_ = "../lake_track_waypoints.csv";
+  ifstream in_map_(map_file_.c_str(), ifstream::in);
+
+  string line;
+  bool first_line = true;
+  while (getline(in_map_, line)) {
+    istringstream iss(line);
+
+    if (first_line)
+      first_line = false;
+    else{
+      double x;
+      char comma;
+      double y;
+      iss >> x;
+      iss >> comma;
+      iss >> y;
+      
+      map_x.push_back(x);
+      map_y.push_back(y);
+    }
+
+  }
+
+  //  for(int i=0; i<map_x.size(); ++i){
+  //    std::cout<<map_x[i]<<" "<<map_y[i]<<std::endl;
+  //  }
+
+  //  std::cout<<"=========================="<<endl;
+
 
   // MPC is initialized here!
   MPC mpc;
@@ -92,13 +174,22 @@ int main() {
           double psi = j[1]["psi"];
           double v = j[1]["speed"];
 
+	  for(int i=0; i<ptsx.size(); ++i){
+	    std::cout<<ptsx[i]<<" "<<ptsy[i]<<std::endl;
+	  }
+
+	  std::cout<<"=========================="<<endl;
+	  std::cout<<px<<" "<<py<<std::endl;
+	  std::cout<<"=========================="<<endl;
+
+
           /*
           * TODO: Calculate steering angle and throttle using MPC.
           *
           * Both are in between [-1, 1].
           *
           */
-          double steer_value;
+          double steer_value = 0;
           double throttle_value;
 
           json msgJson;
@@ -118,8 +209,8 @@ int main() {
           msgJson["mpc_y"] = mpc_y_vals;
 
           //Display the waypoints/reference line
-          vector<double> next_x_vals;
-          vector<double> next_y_vals;
+          vector<double> next_x_vals = ptsx;
+          vector<double> next_y_vals = ptsy;
 
           //.. add (x,y) points to list here, points are in reference to the vehicle's coordinate system
           // the points in the simulator are connected by a Yellow line
