@@ -68,12 +68,12 @@ Eigen::VectorXd polyfit(Eigen::VectorXd xvals, Eigen::VectorXd yvals,
   return result;
 }
 
-double distance(double x1, double y1, double x2, double y2)
+double distance(const double & x1, const double & y1, const double & x2, const double & y2)
 {
   return sqrt((x2-x1)*(x2-x1)+(y2-y1)*(y2-y1));
 }
 
-int ClosestWaypoint(double x, double y, vector<double> & maps_x, vector<double> & maps_y)
+int ClosestWaypoint(const double & x, const double & y, const vector<double> & maps_x, const vector<double> & maps_y)
 {
   double closestLen = 999999; //large number
   int closestWaypoint = 0;
@@ -140,7 +140,6 @@ int main() {
       map_x.push_back(x);
       map_y.push_back(y);
     }
-
   }
 
   //  for(int i=0; i<map_x.size(); ++i){
@@ -153,7 +152,7 @@ int main() {
   // MPC is initialized here!
   MPC mpc;
 
-  h.onMessage([&mpc](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
+  h.onMessage([&mpc, &map_x, &map_y](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                      uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
@@ -182,6 +181,37 @@ int main() {
 	  std::cout<<px<<" "<<py<<std::endl;
 	  std::cout<<"=========================="<<endl;
 
+	  int wp = ClosestWaypoint(px, py, map_x, map_y);
+	  
+	  Eigen::VectorXd xvals(5);
+	  Eigen::VectorXd yvals(5);
+
+	  int mapsize = map_x.size();
+	  for(int i=0; i<5; ++i){
+	    xvals(i) = map_x[(wp+i)%mapsize];
+	    yvals(i) = map_y[(wp+i)%mapsize];
+	  }
+
+	  Eigen::VectorXd coeffs = polyfit(xvals, yvals, 3);
+
+          vector<double> next_x_vals;
+          vector<double> next_y_vals;
+	  
+	  next_x_vals.push_back(px);
+	  next_y_vals.push_back(polyeval(coeffs, px));
+
+	  int curr = wp;
+	  for(int i=0; i<10; ++i){
+	    double scale = 1;
+
+	    if (i == 0){
+	      scale = (px < map_x[(curr+i)%mapsize])?-scale:scale;
+	    }
+	    else{
+	      next_x_vals.push_back(px+scale*i);
+	      next_y_vals.push_back(polyeval(coeffs, px+scale*i));
+	    }
+	  }
 
           /*
           * TODO: Calculate steering angle and throttle using MPC.
@@ -209,8 +239,8 @@ int main() {
           msgJson["mpc_y"] = mpc_y_vals;
 
           //Display the waypoints/reference line
-          vector<double> next_x_vals = ptsx;
-          vector<double> next_y_vals = ptsy;
+	  //          vector<double> next_x_vals = ptsx;
+	  //          vector<double> next_y_vals = ptsy;
 
           //.. add (x,y) points to list here, points are in reference to the vehicle's coordinate system
           // the points in the simulator are connected by a Yellow line
