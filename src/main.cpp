@@ -68,91 +68,13 @@ Eigen::VectorXd polyfit(Eigen::VectorXd xvals, Eigen::VectorXd yvals,
   return result;
 }
 
-double distance(const double & x1, const double & y1, const double & x2, const double & y2)
-{
-  return sqrt((x2-x1)*(x2-x1)+(y2-y1)*(y2-y1));
-}
-
-int ClosestWaypoint(const double & x, const double & y, const vector<double> & maps_x, const vector<double> & maps_y)
-{
-  double closestLen = 999999; //large number
-  int closestWaypoint = 0;
-
-  for(int i = 0; i < maps_x.size(); i++)
-    {
-      double map_x = maps_x[i];
-      double map_y = maps_y[i];
-      double dist = distance(x,y,map_x,map_y);
-      if(dist < closestLen)
-	{
-	  closestLen = dist;
-	  closestWaypoint = i;
-	}
-    }
-  return closestWaypoint;
-}
-
-int NextWaypoint(double x, double y, double theta, vector<double> maps_x, vector<double> maps_y)
-{
-
-  int closestWaypoint = ClosestWaypoint(x,y,maps_x,maps_y);
-
-  double map_x = maps_x[closestWaypoint];
-  double map_y = maps_y[closestWaypoint];
-
-  double heading = atan2( (map_y-y),(map_x-x) );
-
-  double angle = abs(theta-heading);
-
-  if(angle > pi()/4)
-    {
-      closestWaypoint++;
-    }
-
-  return closestWaypoint;
-}
-
 int main() {
   uWS::Hub h;
-
-  vector<double> map_x;
-  vector<double> map_y;
-
-  // Waypoint map to read from
-  string map_file_ = "../lake_track_waypoints.csv";
-  ifstream in_map_(map_file_.c_str(), ifstream::in);
-
-  string line;
-  bool first_line = true;
-  while (getline(in_map_, line)) {
-    istringstream iss(line);
-
-    if (first_line)
-      first_line = false;
-    else{
-      double x;
-      char comma;
-      double y;
-      iss >> x;
-      iss >> comma;
-      iss >> y;
-      
-      map_x.push_back(x);
-      map_y.push_back(y);
-    }
-  }
-
-  //  for(int i=0; i<map_x.size(); ++i){
-  //    std::cout<<map_x[i]<<" "<<map_y[i]<<std::endl;
-  //  }
-
-  //  std::cout<<"=========================="<<endl;
-
 
   // MPC is initialized here!
   MPC mpc;
 
-  h.onMessage([&mpc, &map_x, &map_y](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
+  h.onMessage([&mpc](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                      uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
@@ -173,64 +95,82 @@ int main() {
           double psi = j[1]["psi"];
           double v = j[1]["speed"];
 
-	  for(int i=0; i<ptsx.size(); ++i){
-	    std::cout<<ptsx[i]<<" "<<ptsy[i]<<std::endl;
+	  for (size_t i = 0; i < ptsx.size(); ++i){
+	    // shift to the car reference angle to 90 degree
+	    double shift_x = ptsx[i]-px;
+	    double shift_y = ptsy[i]-py;
+
+	    ptsx[i] = shift_x * cos(0-psi) - shift_y * sin(0-psi);
+	    ptsy[i] = shift_x * sin(0-psi) + shift_y * cos(0-psi);
 	  }
 
-	  std::cout<<"=========================="<<endl;
-	  std::cout<<px<<" "<<py<<std::endl;
-	  std::cout<<"=========================="<<endl;
 
-	  int wp = ClosestWaypoint(px, py, map_x, map_y);
+	  double * ptrx = &ptsx[0];
+	  double * ptry = &ptsy[0];
 	  
-	  Eigen::VectorXd xvals(5);
-	  Eigen::VectorXd yvals(5);
+	  Eigen::Map<Eigen::VectorXd> ptsx_transform(ptrx, 6);
+	  Eigen::Map<Eigen::VectorXd> ptsy_transform(ptry, 6);
 
-	  int mapsize = map_x.size();
-	  for(int i=0; i<5; ++i){
-	    xvals(i) = map_x[(wp+i)%mapsize];
-	    yvals(i) = map_y[(wp+i)%mapsize];
-	  }
+	  auto coeffs = polyfit(ptsx_transform, ptsy_transform, 3);
 
-	  Eigen::VectorXd coeffs = polyfit(xvals, yvals, 3);
+	  // calculate cte and epsi
+	  double cte = polyeval(coeffs, 0);
+	  //	  double epsi = psi - atan(coeffs[1] + 2 * px * coeffs[2] + 3 * coeffs[3] * pow(px,2));
+	  double epsi = -atan(coeffs[1]);
 
+	  //          double steer_value = j[1]["steering_angle"];
+	  //          double throttle_value = j[1]["throttle"];
+
+	  Eigen::VectorXd state(6);
+	  state<<0, 0, 0, v, cte, epsi;
+
+
+	  auto vars = mpc.Solve(state, coeffs);
+
+
+	  // this is the yellow line
           vector<double> next_x_vals;
           vector<double> next_y_vals;
 	  
-	  next_x_vals.push_back(px);
-	  next_y_vals.push_back(polyeval(coeffs, px));
 
-	  int curr = wp;
-	  for(int i=0; i<10; ++i){
-	    double scale = 1;
-
-	    if (i == 0){
-	      scale = (px < map_x[(curr+i)%mapsize])?-scale:scale;
-	    }
-	    else{
-	      next_x_vals.push_back(px+scale*i);
-	      next_y_vals.push_back(polyeval(coeffs, px+scale*i));
-	    }
+	  double poly_inc = 2.5;
+	  int num_points = 25;
+	  for(int i=0; i<num_points; ++i){
+	    next_x_vals.push_back(poly_inc*i);
+	    next_x_vals.push_back(polyeval(coeffs, poly_inc*i));
 	  }
 
+
+	  // and this is the green line
+	  vector<double> mpc_x_vals;
+	  vector<double> mpc_y_vals;
+	  
+	  for(size_t i= 2; i <vars.size(); ++i){
+	    if (i%2 == 0)
+	      mpc_x_vals.push_back(vars[i]);
+	    else
+	      mpc_y_vals.push_back(vars[i]);
+	  }
+
+	  double Lf = 2.67;
+	  
           /*
           * TODO: Calculate steering angle and throttle using MPC.
           *
           * Both are in between [-1, 1].
           *
           */
-          double steer_value = 0;
-          double throttle_value;
 
+	  
           json msgJson;
           // NOTE: Remember to divide by deg2rad(25) before you send the steering value back.
           // Otherwise the values will be in between [-deg2rad(25), deg2rad(25] instead of [-1, 1].
-          msgJson["steering_angle"] = steer_value;
-          msgJson["throttle"] = throttle_value;
+          msgJson["steering_angle"] = vars[0]/(deg2rad(25)*Lf);
+          msgJson["throttle"] = vars[1];
 
           //Display the MPC predicted trajectory 
-          vector<double> mpc_x_vals;
-          vector<double> mpc_y_vals;
+	  //          vector<double> mpc_x_vals;
+	  //         vector<double> mpc_y_vals;
 
           //.. add (x,y) points to list here, points are in reference to the vehicle's coordinate system
           // the points in the simulator are connected by a Green line
@@ -260,7 +200,7 @@ int main() {
           //
           // NOTE: REMEMBER TO SET THIS TO 100 MILLISECONDS BEFORE
           // SUBMITTING.
-          this_thread::sleep_for(chrono::milliseconds(100));
+	  //          this_thread::sleep_for(chrono::milliseconds(100));
           ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
         }
       } else {
