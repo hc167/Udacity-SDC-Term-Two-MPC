@@ -94,39 +94,44 @@ int main() {
           double py = j[1]["y"];
           double psi = j[1]["psi"];
           double v = j[1]["speed"];
+	  double s = j[1]["steering_angle"];
+	  double a = j[1]["throttle"];
+
+	  Eigen::VectorXd ptsx_transform(ptsx.size());
+	  Eigen::VectorXd ptsy_transform(ptsy.size());
 
 	  for (size_t i = 0; i < ptsx.size(); ++i){
 	    // shift to the car reference angle to 90 degree
 	    double shift_x = ptsx[i]-px;
 	    double shift_y = ptsy[i]-py;
 
-	    ptsx[i] = shift_x * cos(0-psi) - shift_y * sin(0-psi);
-	    ptsy[i] = shift_x * sin(0-psi) + shift_y * cos(0-psi);
-	  }
-
-
-	  double * ptrx = &ptsx[0];
-	  double * ptry = &ptsy[0];
-	  
-	  Eigen::Map<Eigen::VectorXd> ptsx_transform(ptrx, 6);
-	  Eigen::Map<Eigen::VectorXd> ptsy_transform(ptry, 6);
+	    ptsx_transform[i] = shift_x * cos(0-psi) - shift_y * sin(0-psi);
+	    ptsy_transform[i] = shift_x * sin(0-psi) + shift_y * cos(0-psi);
+	  }	  
 
 	  auto coeffs = polyfit(ptsx_transform, ptsy_transform, 3);
 
 	  // calculate cte and epsi
 	  double cte = polyeval(coeffs, 0);
+	  // The following was the original equation. It then simplify to -atan(coeffs[1])
 	  //	  double epsi = psi - atan(coeffs[1] + 2 * px * coeffs[2] + 3 * coeffs[3] * pow(px,2));
 	  double epsi = -atan(coeffs[1]);
 
-	  //          double steer_value = j[1]["steering_angle"];
-	  //          double throttle_value = j[1]["throttle"];
-
 	  Eigen::VectorXd state(6);
-	  state<<0, 0, 0, v, cte, epsi;
 
+	  const double Lf = 2.67;
+
+	  double dt = 0.1; // set latency to be 0.1 seconds
+	  // Predicted what is going to happen 0.1 seconds later and use these values for our calculation.
+	  double predicted_x = v*dt + a*dt*dt/2;  // distance = v*t + 1/2 * a * t^2
+	  double predicted_y = 0; // 0 since we want the car follow the track.
+	  double predicted_psi = v*-s/Lf*dt;
+	  double predicted_v = v + a*dt;
+	  double predicted_cte = cte + v*sin(epsi)*dt;
+	  double predicted_epsi = epsi + v*-s/Lf*dt;
+	  state<<predicted_x, predicted_y, predicted_psi, predicted_v, predicted_cte, predicted_epsi;
 
 	  auto vars = mpc.Solve(state, coeffs);
-
 
 	  // this is the yellow line
           vector<double> next_x_vals;
@@ -149,16 +154,6 @@ int main() {
 	    else
 	      mpc_y_vals.push_back(vars[i]);
 	  }
-
-	  double Lf = 2.67;
-	  
-          /*
-          * TODO: Calculate steering angle and throttle using MPC.
-          *
-          * Both are in between [-1, 1].
-          *
-          */
-
 	  
           json msgJson;
           // NOTE: Remember to divide by deg2rad(25) before you send the steering value back.
@@ -193,7 +188,8 @@ int main() {
           //
           // NOTE: REMEMBER TO SET THIS TO 100 MILLISECONDS BEFORE
           // SUBMITTING.
-	  //          this_thread::sleep_for(chrono::milliseconds(100));
+
+          this_thread::sleep_for(chrono::milliseconds(100));
           ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
         }
       } else {
